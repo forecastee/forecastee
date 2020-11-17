@@ -1,0 +1,129 @@
+# Substrate-lite
+# Copyright (C) 2019-2020  Parity Technologies (UK) Ltd.
+# SPDX-License-Identifier: GPL-3.0-or-later WITH Classpath-exception-2.0
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program.  If not, see <http://www.gnu.org/licenses/>.
+
+name: continuous-integration
+
+on:
+  pull_request:
+
+jobs:
+  test:
+    name: Build and test
+    runs-on: ubuntu-latest
+    container:
+      image: rust
+    steps:
+    - uses: actions/checkout@v2
+    - uses: actions/cache@v2
+      with:
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+          target
+        key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+    - name: Run tests, with all features
+      run: cargo test --locked --workspace --all-features
+
+  wasm-node-check:
+    name: Check javascript node
+    runs-on: ubuntu-latest
+    container:
+      image: rust
+    steps:
+    - uses: actions/checkout@v2
+    - uses: actions/cache@v2
+      with:
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+          target
+        key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+    - uses: actions/setup-node@v2.1.2
+      with:
+        node-version: '12'
+    - run: apt-get update && apt install -y binaryen # For `wasm-opt`
+      # The Rust version used for compiling the Wasm node is pinned.
+    - run: rustup install --profile=minimal 1.47.0
+    - run: rustup target add --toolchain=1.47.0 wasm32-wasi
+    - run: cd bin/wasm-node/javascript && npm install && npm start
+
+  check-features:
+    name: Check that combination of features compiles
+    needs: test
+    runs-on: ubuntu-latest
+    container:
+      image: rust
+    steps:
+    - uses: actions/checkout@v2
+    - uses: actions/cache@v2
+      with:
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+          target
+        key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+    - run: cargo check --package substrate-lite --locked --no-default-features
+    - run: cargo check --package substrate-lite --locked --no-default-features --features database-sled
+    - run: cargo check --package substrate-lite --locked --no-default-features --features std
+    - run: cargo check --package substrate-lite --locked --no-default-features --features database-sled --features std
+
+  check-rustdoc-links:
+    name: Check rustdoc intra-doc links
+    runs-on: ubuntu-latest
+    container:
+      image: rust
+    steps:
+    - uses: actions/checkout@v2
+    - name: Install nightly Rust
+      # TODO: intra-doc links are available on nightly only
+      # see https://doc.rust-lang.org/nightly/rustdoc/lints.html#broken_intra_doc_links
+      run: rustup default nightly
+    - name: Check rustdoc links
+      run: RUSTDOCFLAGS="--deny broken_intra_doc_links" cargo +nightly doc --verbose --workspace --no-deps --document-private-items
+
+  fmt:
+    name: Rustfmt
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@v2
+      - name: Install stable toolchain
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          override: true
+      - name: Install rustfmt
+        run: rustup component add rustfmt
+      - name: Run cargo fmt
+        uses: actions-rs/cargo@v1
+        with:
+          command: fmt
+          args: --all -- --check
+
+  # TODO: as explained in the official repo (https://github.com/actions-rs/clippy), this action uses unstable GH actions features, but has the huge advantage of not requiring `GITHUB_TOKEN` and working on PRs from forked repositories ; should eventually replace `actions-rs/clippy@master` with a specific version
+  clippy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v1
+      - uses: actions-rs/toolchain@v1
+        with:
+            toolchain: nightly
+            components: clippy
+            override: true
+      - uses: actions-rs/clippy@master
+        with:
+          args: --all-features --all-targets
